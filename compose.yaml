@@ -1,0 +1,21 @@
+services:
+    test_db:
+        container_name: vow_db_test
+        image: postgres:16-alpine
+        restart: no
+        environment:
+            POSTGRES_DB: vow_test
+            POSTGRES_USER: vow
+            POSTGRES_PASSWORD: vow
+        ports:
+            - "5432:5432"
+        volumes:
+            - pgdata_test:/var/lib/postgresql/data
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U vow -d vow_test"]
+            interval: 5s
+            timeout: 3s
+            retries: 5
+
+volumes:
+    pgdata_test:
