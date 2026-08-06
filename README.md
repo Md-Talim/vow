@@ -33,7 +33,7 @@ It is designed to be embedded directly into your application, ensuring your data
 
         migrator := vow.New(dbPool, "./migrations")
 
-        if err := migrator.Run(context.Background()); err != nil {
+        if err := migrator.Up(context.Background()); err != nil {
             log.Fatalf("failed to migrate: %v", err)
         }
     }

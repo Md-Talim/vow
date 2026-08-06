@@ -43,7 +43,7 @@ func TestMigrator(t *testing.T) {
 
 	// 4. Run the actual migrator
 	m := New(pool, tmpDir, WithTableName("test_schema_migrations"))
-	if err := m.Run(ctx); err != nil {
+	if err := m.Up(ctx); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
 

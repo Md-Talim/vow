@@ -53,7 +53,7 @@ func WithLockName(name string) Option {
 	return func(m *Migrator) { m.lockName = name }
 }
 
-func (m *Migrator) Run(ctx context.Context) error {
+func (m *Migrator) Up(ctx context.Context) error {
 	logger := m.logger.With("component", "migrations", "dir", m.migrationsDir)
 	start := time.Now()
 
