@@ -26,8 +26,14 @@ func TestMigrator(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Create a dummy migration file
-	migrationFile := filepath.Join(tmpDir, "000001_test.sql")
+	migrationFile := filepath.Join(tmpDir, "000001_test.up.sql")
 	if err := os.WriteFile(migrationFile, []byte("CREATE TABLE users (id SERIAL PRIMARY KEY);"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a dummy migration down file
+	downFile := filepath.Join(tmpDir, "000001_test.down.sql")
+	if err := os.WriteFile(downFile, []byte("DROP TABLE users;"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -56,5 +62,19 @@ func TestMigrator(t *testing.T) {
 	}
 	if !exists {
 		t.Error("expected users table to exists, but it was not found")
+	}
+
+	// 6. Run migration rollback with Down()
+	if err := m.Down(ctx, 1); err != nil {
+		t.Fatalf("rollback failed: %v", err)
+	}
+
+	// Check if the table was deleted
+	err = pool.QueryRow(ctx, "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'users')").Scan(&exists)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists {
+		t.Error("expected users table to not exists, but it exists")
 	}
 }

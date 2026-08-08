@@ -41,6 +41,7 @@ func New(db *pgxpool.Pool, migrationsDir string, opts ...Option) *Migrator {
 		opt(m)
 	}
 
+	m.logger = m.logger.With("component", "migrations", "dir", m.migrationsDir)
 	return m
 }
 
@@ -58,7 +59,6 @@ func WithLockName(name string) Option {
 
 // Up applies all pending migrations in the specified directory to the database.
 func (m *Migrator) Up(ctx context.Context) error {
-	logger := m.logger.With("component", "migrations", "dir", m.migrationsDir)
 	start := time.Now()
 
 	conn, err := m.db.Acquire(ctx)
@@ -76,7 +76,7 @@ func (m *Migrator) Up(ctx context.Context) error {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if _, err := conn.Exec(cleanupCtx, "SELECT pg_advisory_unlock(hashtextextended($1, 0))", m.lockName); err != nil {
-			logger.Warn("failed to release advisory lock", "lock_name", m.lockName, "err", err)
+			m.logger.Warn("failed to release advisory lock", "lock_name", m.lockName, "err", err)
 			return
 		}
 	}()
@@ -115,7 +115,46 @@ func (m *Migrator) Up(ctx context.Context) error {
 		}
 	}
 
-	logger.Info("migration run complete", "duration_ms", time.Since(start).Milliseconds())
+	m.logger.Info("migration run complete", "duration_ms", time.Since(start).Milliseconds())
+	return nil
+}
+
+func (m *Migrator) Down(ctx context.Context, steps int) error {
+	start := time.Now()
+
+	if steps <= 0 {
+		return fmt.Errorf("steps must be greater than 0")
+	}
+
+	conn, err := m.db.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire connection: %w", err)
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock(hashtextextended($1, 0))", m.lockName); err != nil {
+		return fmt.Errorf("acquire migration lock (%s): %w", m.lockName, err)
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := conn.Exec(cleanupCtx, "SELECT pg_advisory_unlock(hashtextextended($1, 0))", m.lockName); err != nil {
+			m.logger.Warn("failed to release advisory lock", "lock_name", m.lockName, "err", err)
+		}
+	}()
+
+	applied, err := m.loadMigrationsToRollback(ctx, conn, steps)
+	if err != nil {
+		return fmt.Errorf("list migrations to rollback: %w", err)
+	}
+
+	for _, version := range applied {
+		if err = m.rollbackMigration(ctx, conn, version); err != nil {
+			return err
+		}
+	}
+
+	m.logger.Info("rollback run complete", "duration_ms", time.Since(start).Milliseconds())
 	return nil
 }
 
@@ -153,6 +192,39 @@ func (m *Migrator) applyMigration(ctx context.Context, conn *pgxpool.Conn, filen
 	return nil
 }
 
+func (m *Migrator) rollbackMigration(ctx context.Context, conn *pgxpool.Conn, version string) error {
+	filename := fmt.Sprintf("%s.down.sql", version)
+	fullPath := filepath.Join(m.migrationsDir, filename)
+	sqlBytes, err := os.ReadFile(fullPath)
+	if err != nil {
+		return fmt.Errorf("read file for rollback %s: %w", filename, err)
+	}
+
+	m.logger.Debug("rolling back migration", "version", version)
+
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx for %s: %w", filename, err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err = tx.Exec(ctx, string(sqlBytes)); err != nil {
+		return fmt.Errorf("exec rollback %s: %w", filename, err)
+	}
+
+	query := fmt.Sprintf("DELETE FROM %s WHERE version = $1", m.tableName)
+	if _, err = tx.Exec(ctx, query, version); err != nil {
+		return fmt.Errorf("delete migration record %s: %w", version, err)
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit rollback %s: %w", filename, err)
+	}
+
+	m.logger.Info("rollback migration", "version", version)
+	return nil
+}
+
 // loadAppliedMigrations retrieves the set of applied migration versions from the database.
 func (m *Migrator) loadAppliedMigrations(ctx context.Context, conn *pgxpool.Conn) (map[string]struct{}, error) {
 	query := fmt.Sprintf(`SELECT version FROM %s ORDER BY version`, m.tableName)
@@ -175,5 +247,30 @@ func (m *Migrator) loadAppliedMigrations(ctx context.Context, conn *pgxpool.Conn
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate applied versions: %w", err)
 	}
+	return applied, nil
+}
+
+func (m *Migrator) loadMigrationsToRollback(ctx context.Context, conn *pgxpool.Conn, steps int) ([]string, error) {
+	query := fmt.Sprintf(`SELECT version FROM %s ORDER BY version DESC LIMIT $1`, m.tableName)
+	rows, err := conn.Query(ctx, query, steps)
+	if err != nil {
+		return nil, fmt.Errorf("read applied versions for rollback: %w", err)
+	}
+	defer rows.Close()
+
+	applied := []string{}
+
+	for rows.Next() {
+		var version string
+		if err := rows.Scan(&version); err != nil {
+			return nil, fmt.Errorf("scan applied version for rollback: %w", err)
+		}
+		applied = append(applied, version)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate applied versions for rollback: %w", err)
+	}
+
 	return applied, nil
 }
