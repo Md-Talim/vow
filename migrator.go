@@ -7,12 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var migrationFilenamePattern = regexp.MustCompile(`^\d{6}_[a-z0-9_]+\.sql$`)
+var migrationFilenamePattern = regexp.MustCompile(`^\d{6}_[a-z0-9_]+\.(up|down)\.sql$`)
 
 type Migrator struct {
 	db            *pgxpool.Pool
@@ -25,6 +26,8 @@ type Migrator struct {
 // Option allows for functional configuration of the Migrator
 type Option func(*Migrator)
 
+// New creates a new Migrator instance with the provided
+// database connection pool and migrations directory.
 func New(db *pgxpool.Pool, migrationsDir string, opts ...Option) *Migrator {
 	m := &Migrator{
 		db:            db,
@@ -53,6 +56,7 @@ func WithLockName(name string) Option {
 	return func(m *Migrator) { m.lockName = name }
 }
 
+// Up applies all pending migrations in the specified directory to the database.
 func (m *Migrator) Up(ctx context.Context) error {
 	logger := m.logger.With("component", "migrations", "dir", m.migrationsDir)
 	start := time.Now()
@@ -115,12 +119,16 @@ func (m *Migrator) Up(ctx context.Context) error {
 	return nil
 }
 
+// applyMigration executes a single migration file within a transaction
+// and records its version in the migrations table.
 func (m *Migrator) applyMigration(ctx context.Context, conn *pgxpool.Conn, filename string) error {
 	fullPath := filepath.Join(m.migrationsDir, filename)
 	sqlBytes, err := os.ReadFile(fullPath)
 	if err != nil {
 		return fmt.Errorf("read migration file %s: %w", filename, err)
 	}
+
+	versionID := strings.TrimSuffix(filename, ".up.sql")
 
 	tx, err := conn.Begin(ctx)
 	if err != nil {
@@ -133,7 +141,7 @@ func (m *Migrator) applyMigration(ctx context.Context, conn *pgxpool.Conn, filen
 	}
 
 	query := fmt.Sprintf("INSERT INTO %s(version) VALUES($1)", m.tableName)
-	if _, err = tx.Exec(ctx, query, filename); err != nil {
+	if _, err = tx.Exec(ctx, query, versionID); err != nil {
 		return fmt.Errorf("track migration %s: %w", filename, err)
 	}
 
@@ -141,10 +149,11 @@ func (m *Migrator) applyMigration(ctx context.Context, conn *pgxpool.Conn, filen
 		return fmt.Errorf("commit migration %s: %w", filename, err)
 	}
 
-	m.logger.Info("applied migration", "version", filename)
+	m.logger.Info("applied migration", "version", versionID)
 	return nil
 }
 
+// loadAppliedMigrations retrieves the set of applied migration versions from the database.
 func (m *Migrator) loadAppliedMigrations(ctx context.Context, conn *pgxpool.Conn) (map[string]struct{}, error) {
 	query := fmt.Sprintf(`SELECT version FROM %s ORDER BY version`, m.tableName)
 	rows, err := conn.Query(ctx, query)

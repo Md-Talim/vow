@@ -20,7 +20,7 @@ It is designed to be embedded directly into your application, ensuring your data
     ```
 
 2. **Usage:**
-   Create a directory (e.g., `./migrations`) and add your `.sql` files with the format `000001_initial.sql`.
+   Create a directory (e.g., `./migrations`) and add your `.sql` files with the format `000001_initial.up.sql`.
 
     ```go
     import (
@@ -52,7 +52,9 @@ migrator := vow.New(dbPool, "./migrations",
 
 ## Migration File Format
 
-Migration files must be named using a numeric prefix to ensure ordering:
+Migration files must be named using a numeric prefix to ensure ordering, with a `.up.sql` or `.down.sql` extension:
 
-- `000001_create_users.sql`
-- `000002_add_email_index.sql`
+- `000001_create_users.up.sql`
+- `000001_create_users.down.sql`
+- `000002_add_email_index.up.sql`
+- `000002_add_email_index.down.sql`

@@ -13,7 +13,7 @@ func listSQLMigrations(dir string) ([]string, error) {
 		return nil, err
 	}
 
-	seen := make(map[string]string) // normalized -> original
+	seen := make(map[string]string)
 	var out []string
 
 	for _, e := range entries {
@@ -26,10 +26,11 @@ func listSQLMigrations(dir string) ([]string, error) {
 			continue
 		}
 
+		// Strictly enforce the format NNNNNN_name.up.sql or NNNNNN_name.down.sql
 		if !migrationFilenamePattern.MatchString(name) {
 			return nil, fmt.Errorf(
-				"invalid migration filename %q in %s: expected format %q (example: 001_create_tasks.sql)",
-				name, dir, `NNN_snake_case.sql`,
+				"invalid migration filename %q in %s: expected format NNNNNN_name.up.sql or NNNNNN_name.down.sql",
+				name, dir,
 			)
 		}
 
@@ -39,7 +40,10 @@ func listSQLMigrations(dir string) ([]string, error) {
 		}
 
 		seen[normalized] = name
-		out = append(out, name)
+		// FILTER: Only include the "up" migrations in the list of files to apply.
+		if strings.HasSuffix(normalized, ".up.sql") {
+			out = append(out, name)
+		}
 	}
 
 	sort.Strings(out)
