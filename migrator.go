@@ -43,7 +43,7 @@ type Option func(*Migrator)
 
 // New creates a new Migrator instance with the provided
 // database connection pool and migrations directory.
-func New(db *pgxpool.Pool, migrationsDir string, opts ...Option) *Migrator {
+func New(db *pgxpool.Pool, migrationsDir string, opts ...Option) (*Migrator, error) {
 	m := &Migrator{
 		db:            db,
 		migrationsDir: migrationsDir,
@@ -56,8 +56,12 @@ func New(db *pgxpool.Pool, migrationsDir string, opts ...Option) *Migrator {
 		opt(m)
 	}
 
+	if err := validateMigrationFiles(migrationsDir); err != nil {
+		return nil, fmt.Errorf("validate migration files: %w", err)
+	}
+
 	m.logger = m.logger.With("component", "migrations", "dir", m.migrationsDir)
-	return m
+	return m, nil
 }
 
 func WithLogger(l *slog.Logger) Option {

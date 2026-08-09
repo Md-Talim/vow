@@ -24,22 +24,25 @@ It is designed to be embedded directly into your application, ensuring your data
    Create a directory (e.g., `./migrations`) and add paired `.up.sql` / `.down.sql` files.
 
     ```go
-    import (
-        "context"
-        "log"
+        import (
+            "context"
+            "log"
 
-        "github.com/md-talim/vow"
-    )
+            "github.com/md-talim/vow"
+        )
 
-    func main() {
-        // ... initialize your pgxpool.Pool ...
+        func main() {
+            // ... initialize your pgxpool.Pool ...
 
-        migrator := vow.New(dbPool, "./migrations")
+            migrator, err := vow.New(dbPool, "./migrations")
+            if err != nil {
+                log.Fatalf("invalid migrations directory: %v", err)
+            }
 
-        if _, err := migrator.Up(context.Background()); err != nil {
-            log.Fatalf("failed to migrate: %v", err)
+            if _, err := migrator.Up(context.Background()); err != nil {
+                log.Fatalf("failed to migrate: %v", err)
+            }
         }
-    }
     ```
 
 ## Rolling Back
@@ -102,7 +105,13 @@ Migration files must be named using a numeric prefix to ensure ordering, paired 
 - `000002_add_email_index.up.sql`
 - `000002_add_email_index.down.sql`
 
-`New()` validates this pairing at construction time, a missing `.down.sql` for any `.up.sql` (or vice versa) fails immediately, rather than surfacing later when a rollback is actually attempted.
+`New()` validates the migrations directory up front:
+
+- Every `.up.sql` must have a matching `.down.sql`, and vice versa.
+- Filenames must match the `NNNNNN_name.up.sql` / `NNNNNN_name.down.sql` pattern.
+- Subdirectories are not allowed inside the migrations directory.
+
+A malformed directory fails at construction time, not later when a migration or rollback is actually attempted.
 
 ## Design Notes
 
