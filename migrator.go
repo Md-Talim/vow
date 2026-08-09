@@ -23,6 +23,21 @@ type Migrator struct {
 	lockName      string
 }
 
+// Result reports the outcome of an Up or Down run.
+type Result struct {
+	// Versions lists the migrations that changed state during this run,
+	// in the order they were applied (Up) or rolled back (Down).
+	// Empty if nothing needed to happen.
+	Versions []string
+
+	// Skipped is the number of already-applied migrations left untouched.
+	// Always 0 for Down.
+	Skipped int
+
+	// Duration is the total wall-clock time for the run.
+	Duration time.Duration
+}
+
 // Option allows for functional configuration of the Migrator
 type Option func(*Migrator)
 
@@ -58,18 +73,19 @@ func WithLockName(name string) Option {
 }
 
 // Up applies all pending migrations in the specified directory to the database.
-func (m *Migrator) Up(ctx context.Context) error {
+func (m *Migrator) Up(ctx context.Context) (Result, error) {
 	start := time.Now()
+	result := Result{}
 
 	conn, err := m.db.Acquire(ctx)
 	if err != nil {
-		return fmt.Errorf("acquire connection: %w", err)
+		return result, fmt.Errorf("acquire connection: %w", err)
 	}
 	defer conn.Release()
 
 	// Session-level advisory lock
 	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock(hashtextextended($1, 0))", m.lockName); err != nil {
-		return fmt.Errorf("acquire migration lock (%s): %w", m.lockName, err)
+		return result, fmt.Errorf("acquire migration lock (%s): %w", m.lockName, err)
 	}
 
 	defer func() {
@@ -87,53 +103,58 @@ func (m *Migrator) Up(ctx context.Context) error {
 		applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	)`, m.tableName)
 	if _, err := conn.Exec(ctx, query); err != nil {
-		return fmt.Errorf("create migration table: %w", err)
+		return result, fmt.Errorf("create migration table: %w", err)
 	}
 
 	migrationFiles, err := listSQLMigrations(m.migrationsDir)
 	if err != nil {
-		return fmt.Errorf("list migrations: %w", err)
+		return result, fmt.Errorf("list migrations: %w", err)
 	}
 
 	applied, err := m.loadAppliedMigrations(ctx, conn)
 	if err != nil {
-		return err
+		return result, err
 	}
 
 	if err = validateAppliedVersionsExistsOnDisk(applied, migrationFiles); err != nil {
-		return err
+		return result, err
 	}
 
 	// Execute only pending migrations, each in its own transaction
 	for _, filename := range migrationFiles {
 		if _, ok := applied[filename]; ok {
+			result.Skipped++
 			continue
 		}
 
 		if err := m.applyMigration(ctx, conn, filename); err != nil {
-			return err
+			return result, err
 		}
+		result.Versions = append(result.Versions, strings.TrimSuffix(filename, ".up.sql"))
 	}
 
-	m.logger.Info("migration run complete", "duration_ms", time.Since(start).Milliseconds())
-	return nil
+	result.Duration = time.Since(start)
+	m.logger.Info("migration run complete", "duration_ms", result.Duration.Milliseconds())
+	return result, nil
 }
 
-func (m *Migrator) Down(ctx context.Context, steps int) error {
+// Down rolls back the last `steps` applied migrations in reverse order.
+func (m *Migrator) Down(ctx context.Context, steps int) (Result, error) {
 	start := time.Now()
+	result := Result{}
 
 	if steps <= 0 {
-		return fmt.Errorf("steps must be greater than 0")
+		return result, fmt.Errorf("steps must be greater than 0")
 	}
 
 	conn, err := m.db.Acquire(ctx)
 	if err != nil {
-		return fmt.Errorf("acquire connection: %w", err)
+		return result, fmt.Errorf("acquire connection: %w", err)
 	}
 	defer conn.Release()
 
 	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock(hashtextextended($1, 0))", m.lockName); err != nil {
-		return fmt.Errorf("acquire migration lock (%s): %w", m.lockName, err)
+		return result, fmt.Errorf("acquire migration lock (%s): %w", m.lockName, err)
 	}
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -145,17 +166,19 @@ func (m *Migrator) Down(ctx context.Context, steps int) error {
 
 	applied, err := m.loadMigrationsToRollback(ctx, conn, steps)
 	if err != nil {
-		return fmt.Errorf("list migrations to rollback: %w", err)
+		return result, fmt.Errorf("list migrations to rollback: %w", err)
 	}
 
 	for _, version := range applied {
 		if err = m.rollbackMigration(ctx, conn, version); err != nil {
-			return err
+			return result, err
 		}
+		result.Versions = append(result.Versions, version)
 	}
 
-	m.logger.Info("rollback run complete", "duration_ms", time.Since(start).Milliseconds())
-	return nil
+	result.Duration = time.Since(start)
+	m.logger.Info("rollback run complete", "duration_ms", result.Duration.Milliseconds())
+	return result, nil
 }
 
 // applyMigration executes a single migration file within a transaction

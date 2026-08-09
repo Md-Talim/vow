@@ -49,8 +49,12 @@ func TestMigrator(t *testing.T) {
 
 	// 4. Run the actual migrator
 	m := New(pool, tmpDir, WithTableName("test_schema_migrations"))
-	if err := m.Up(ctx); err != nil {
+	result, err := m.Up(ctx)
+	if err != nil {
 		t.Fatalf("migration failed: %v", err)
+	}
+	if len(result.Versions) != 1 || result.Versions[0] != "000001_test" {
+		t.Fatalf("expected 1 migration to be applied, got: %v", result.Versions)
 	}
 
 	// 5. Verification (Sanity check)
@@ -65,8 +69,12 @@ func TestMigrator(t *testing.T) {
 	}
 
 	// 6. Run migration rollback with Down()
-	if err := m.Down(ctx, 1); err != nil {
+	result, err = m.Down(ctx, 1)
+	if err != nil {
 		t.Fatalf("rollback failed: %v", err)
+	}
+	if len(result.Versions) != 1 || result.Versions[0] != "000001_test" {
+		t.Errorf("expected 1 migration to be rolled back, got: %v", result.Versions)
 	}
 
 	// Check if the table was deleted
