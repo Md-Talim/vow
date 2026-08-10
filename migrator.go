@@ -104,6 +104,7 @@ func (m *Migrator) Up(ctx context.Context) (Result, error) {
 	// Ensure migrations tracking table exists
 	query := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
 		version    TEXT PRIMARY KEY,
+		checksum   TEXT NOT NULL,
 		applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	)`, m.tableName)
 	if _, err := conn.Exec(ctx, query); err != nil {
@@ -119,8 +120,7 @@ func (m *Migrator) Up(ctx context.Context) (Result, error) {
 	if err != nil {
 		return result, err
 	}
-
-	if err = validateAppliedVersionsExistsOnDisk(applied, migrationFiles); err != nil {
+	if err = m.verifyAppliedMigrations(ctx, conn); err != nil {
 		return result, err
 	}
 
@@ -173,6 +173,10 @@ func (m *Migrator) Down(ctx context.Context, steps int) (Result, error) {
 		return result, fmt.Errorf("list migrations to rollback: %w", err)
 	}
 
+	if err = m.verifyAppliedMigrations(ctx, conn); err != nil {
+		return result, err
+	}
+
 	for _, version := range applied {
 		if err = m.rollbackMigration(ctx, conn, version); err != nil {
 			return result, err
@@ -195,6 +199,7 @@ func (m *Migrator) applyMigration(ctx context.Context, conn *pgxpool.Conn, filen
 	}
 
 	versionID := strings.TrimSuffix(filename, ".up.sql")
+	checksum := calculateChecksum(sqlBytes)
 
 	tx, err := conn.Begin(ctx)
 	if err != nil {
@@ -206,8 +211,8 @@ func (m *Migrator) applyMigration(ctx context.Context, conn *pgxpool.Conn, filen
 		return fmt.Errorf("exec migration %s: %w", filename, err)
 	}
 
-	query := fmt.Sprintf("INSERT INTO %s(version) VALUES($1)", m.tableName)
-	if _, err = tx.Exec(ctx, query, versionID); err != nil {
+	query := fmt.Sprintf("INSERT INTO %s(version, checksum) VALUES($1, $2)", m.tableName)
+	if _, err = tx.Exec(ctx, query, versionID, checksum); err != nil {
 		return fmt.Errorf("track migration %s: %w", filename, err)
 	}
 
@@ -219,6 +224,8 @@ func (m *Migrator) applyMigration(ctx context.Context, conn *pgxpool.Conn, filen
 	return nil
 }
 
+// rollbackMigration executes the down migration for a given version within a transaction
+// and removes its record from the migrations table.
 func (m *Migrator) rollbackMigration(ctx context.Context, conn *pgxpool.Conn, version string) error {
 	filename := fmt.Sprintf("%s.down.sql", version)
 	fullPath := filepath.Join(m.migrationsDir, filename)
@@ -277,6 +284,8 @@ func (m *Migrator) loadAppliedMigrations(ctx context.Context, conn *pgxpool.Conn
 	return applied, nil
 }
 
+// loadMigrationsToRollback retrieves the last `steps` applied migration versions
+// from the database, in reverse order.
 func (m *Migrator) loadMigrationsToRollback(ctx context.Context, conn *pgxpool.Conn, steps int) ([]string, error) {
 	query := fmt.Sprintf(`SELECT version FROM %s ORDER BY version DESC LIMIT $1`, m.tableName)
 	rows, err := conn.Query(ctx, query, steps)
@@ -300,4 +309,39 @@ func (m *Migrator) loadMigrationsToRollback(ctx context.Context, conn *pgxpool.C
 	}
 
 	return applied, nil
+}
+
+// verifyAppliedMigrations confirms every already-applied migration is
+// still present on disk and unmodified, comparing stored checksums
+// against the current file contents. Returns an error on the first
+// missing or drifted migration it finds.
+func (m *Migrator) verifyAppliedMigrations(ctx context.Context, conn *pgxpool.Conn) error {
+	query := fmt.Sprintf(`SELECT version, checksum FROM %s`, m.tableName)
+	rows, err := conn.Query(ctx, query)
+	if err != nil {
+		return fmt.Errorf("read applied checksum: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var version, storedChecksum string
+		if err := rows.Scan(&version, &storedChecksum); err != nil {
+			return fmt.Errorf("scan checksum for %s: %w", version, err)
+		}
+
+		path := filepath.Join(m.migrationsDir, fmt.Sprintf("%s.up.sql", version))
+		sqlBytes, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("applied migration %s is missing from disk: migration filenames are immutable, do not rename or delete applied migration files", version)
+			}
+			return fmt.Errorf("read applied migration %s: %w", version, err)
+		}
+
+		currentChecksum := calculateChecksum(sqlBytes)
+		if currentChecksum != storedChecksum {
+			return fmt.Errorf("checksum mismatch for %s: file has changed since it was applied", version)
+		}
+	}
+	return rows.Err()
 }

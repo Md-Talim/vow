@@ -1,6 +1,9 @@
 package vow
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +11,7 @@ import (
 	"strings"
 )
 
+// listSQLMigrations returns a sorted list of migration files in the given directory.
 func listSQLMigrations(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -51,31 +55,8 @@ func listSQLMigrations(dir string) ([]string, error) {
 	return out, nil
 }
 
-func validateAppliedVersionsExistsOnDisk(appliedMigrations map[string]struct{}, migrationFiles []string) error {
-	onDisk := make(map[string]struct{}, len(migrationFiles))
-	for _, f := range migrationFiles {
-		onDisk[f] = struct{}{}
-	}
-
-	var missing []string
-	for migration := range appliedMigrations {
-		if _, ok := onDisk[migration]; !ok {
-			missing = append(missing, migration)
-		}
-	}
-
-	if len(missing) > 0 {
-		sort.Strings(missing)
-		return fmt.Errorf(
-			`migration history mismatch: applied version(s) missing on disk: %s.
-			Migration filenames are immutable version IDs; do not rename or delete applied migration files.`,
-			strings.Join(missing, ", "),
-		)
-	}
-
-	return nil
-}
-
+// validateMigrationFiles checks that for every migration file in the directory,
+// there is a corresponding pair (up/down).
 func validateMigrationFiles(migrationsDir string) error {
 	entries, err := os.ReadDir(migrationsDir)
 	if err != nil {
@@ -119,4 +100,12 @@ func validateMigrationFiles(migrationsDir string) error {
 	}
 
 	return nil
+}
+
+// calculateChecksum computes the SHA-256 checksum of the given data
+// and returns it as a hexadecimal string.
+func calculateChecksum(data []byte) string {
+	normalized := bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+	hash := sha256.Sum256(normalized)
+	return hex.EncodeToString(hash[:])
 }
