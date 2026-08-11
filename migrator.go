@@ -3,9 +3,9 @@ package vow
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -16,11 +16,11 @@ import (
 var migrationFilenamePattern = regexp.MustCompile(`^\d{6}_[a-z0-9_]+\.(up|down)\.sql$`)
 
 type Migrator struct {
-	db            *pgxpool.Pool
-	logger        *slog.Logger
-	migrationsDir string
-	tableName     string
-	lockName      string
+	db        *pgxpool.Pool
+	fsys      fs.FS // migration
+	logger    *slog.Logger
+	tableName string
+	lockName  string
 }
 
 // Result reports the outcome of an Up or Down run.
@@ -43,24 +43,24 @@ type Option func(*Migrator)
 
 // New creates a new Migrator instance with the provided
 // database connection pool and migrations directory.
-func New(db *pgxpool.Pool, migrationsDir string, opts ...Option) (*Migrator, error) {
+func New(db *pgxpool.Pool, fsys fs.FS, opts ...Option) (*Migrator, error) {
 	m := &Migrator{
-		db:            db,
-		migrationsDir: migrationsDir,
-		logger:        slog.Default(),
-		tableName:     "schema_migrations",
-		lockName:      "vow:migrations",
+		db:        db,
+		fsys:      fsys,
+		logger:    slog.Default(),
+		tableName: "schema_migrations",
+		lockName:  "vow:migrations",
 	}
 
 	for _, opt := range opts {
 		opt(m)
 	}
 
-	if err := validateMigrationFiles(migrationsDir); err != nil {
+	if err := validateMigrationFiles(m.fsys); err != nil {
 		return nil, fmt.Errorf("validate migration files: %w", err)
 	}
 
-	m.logger = m.logger.With("component", "migrations", "dir", m.migrationsDir)
+	m.logger = m.logger.With("component", "migrations")
 	return m, nil
 }
 
@@ -111,7 +111,7 @@ func (m *Migrator) Up(ctx context.Context) (Result, error) {
 		return result, fmt.Errorf("create migration table: %w", err)
 	}
 
-	migrationFiles, err := listSQLMigrations(m.migrationsDir)
+	migrationFiles, err := listSQLMigrations(m.fsys)
 	if err != nil {
 		return result, fmt.Errorf("list migrations: %w", err)
 	}
@@ -192,8 +192,7 @@ func (m *Migrator) Down(ctx context.Context, steps int) (Result, error) {
 // applyMigration executes a single migration file within a transaction
 // and records its version in the migrations table.
 func (m *Migrator) applyMigration(ctx context.Context, conn *pgxpool.Conn, filename string) error {
-	fullPath := filepath.Join(m.migrationsDir, filename)
-	sqlBytes, err := os.ReadFile(fullPath)
+	sqlBytes, err := fs.ReadFile(m.fsys, filename)
 	if err != nil {
 		return fmt.Errorf("read migration file %s: %w", filename, err)
 	}
@@ -228,8 +227,7 @@ func (m *Migrator) applyMigration(ctx context.Context, conn *pgxpool.Conn, filen
 // and removes its record from the migrations table.
 func (m *Migrator) rollbackMigration(ctx context.Context, conn *pgxpool.Conn, version string) error {
 	filename := fmt.Sprintf("%s.down.sql", version)
-	fullPath := filepath.Join(m.migrationsDir, filename)
-	sqlBytes, err := os.ReadFile(fullPath)
+	sqlBytes, err := fs.ReadFile(m.fsys, filename)
 	if err != nil {
 		return fmt.Errorf("read file for rollback %s: %w", filename, err)
 	}
@@ -329,8 +327,8 @@ func (m *Migrator) verifyAppliedMigrations(ctx context.Context, conn *pgxpool.Co
 			return fmt.Errorf("scan checksum for %s: %w", version, err)
 		}
 
-		path := filepath.Join(m.migrationsDir, fmt.Sprintf("%s.up.sql", version))
-		sqlBytes, err := os.ReadFile(path)
+		filename := fmt.Sprintf("%s.up.sql", version)
+		sqlBytes, err := fs.ReadFile(m.fsys, filename)
 		if err != nil {
 			if os.IsNotExist(err) {
 				return fmt.Errorf("applied migration %s is missing from disk: migration filenames are immutable, do not rename or delete applied migration files", version)

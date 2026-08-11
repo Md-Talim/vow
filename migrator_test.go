@@ -48,7 +48,7 @@ func TestMigrator(t *testing.T) {
 	defer pool.Close()
 
 	// 4. Run the actual migrator
-	m, err := New(pool, tmpDir, WithTableName("test_schema_migrations"))
+	m, err := New(pool, os.DirFS(tmpDir), WithTableName("test_schema_migrations"))
 	result, err := m.Up(ctx)
 	if err != nil {
 		t.Fatalf("migration failed: %v", err)

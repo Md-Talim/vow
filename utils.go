@@ -4,16 +4,16 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"io/fs"
 	"sort"
 	"strings"
 )
 
 // listSQLMigrations returns a sorted list of migration files in the given directory.
-func listSQLMigrations(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
+func listSQLMigrations(fsys fs.FS) ([]string, error) {
+	entries, err := fs.ReadDir(fsys, ".")
 	if err != nil {
 		return nil, err
 	}
@@ -34,14 +34,14 @@ func listSQLMigrations(dir string) ([]string, error) {
 		// Strictly enforce the format NNNNNN_name.up.sql or NNNNNN_name.down.sql
 		if !migrationFilenamePattern.MatchString(name) {
 			return nil, fmt.Errorf(
-				"invalid migration filename %q in %s: expected format NNNNNN_name.up.sql or NNNNNN_name.down.sql",
-				name, dir,
+				"invalid migration filename %q: expected format %q",
+				name, "NNNNNN_name.up.sql or NNNNNN_name.down.sql",
 			)
 		}
 
 		normalized := strings.ToLower(name)
 		if prev, ok := seen[normalized]; ok {
-			return nil, fmt.Errorf("duplicate migration filename detected (case-insensitive): %q and %q in %s", prev, name, dir)
+			return nil, fmt.Errorf("duplicate migration filename detected (case-insensitive): %q and %q", prev, name)
 		}
 
 		seen[normalized] = name
@@ -57,8 +57,8 @@ func listSQLMigrations(dir string) ([]string, error) {
 
 // validateMigrationFiles checks that for every migration file in the directory,
 // there is a corresponding pair (up/down).
-func validateMigrationFiles(migrationsDir string) error {
-	entries, err := os.ReadDir(migrationsDir)
+func validateMigrationFiles(fsys fs.FS) error {
+	entries, err := fs.ReadDir(fsys, ".")
 	if err != nil {
 		return fmt.Errorf("read migrations directory: %w", err)
 	}
@@ -69,11 +69,17 @@ func validateMigrationFiles(migrationsDir string) error {
 		name := e.Name()
 
 		if e.IsDir() {
-			return fmt.Errorf("unexpected subdirectory %q in migrations directory: only .up.sql/.down.sql files are allowed", name)
+			return fmt.Errorf(
+				"unexpected subdirectory %q in migrations directory: only %q files are allowed",
+				name, ".up.sql/.down.sql",
+			)
 		}
 
 		if !migrationFilenamePattern.MatchString(name) {
-			return fmt.Errorf("invalid migration filename %q: expected format NNNNNN_name.up.sql or NNNNNN_name.down.sql", name)
+			return fmt.Errorf(
+				"invalid migration filename %q: expected format %q",
+				name, "NNNNNN_name.up.sql or NNNNNN_name.down.sql",
+			)
 		}
 
 		if seen[name] {
@@ -88,8 +94,8 @@ func validateMigrationFiles(migrationsDir string) error {
 			pairName = strings.TrimSuffix(name, ".down.sql") + ".up.sql"
 		}
 
-		if _, err := os.Stat(filepath.Join(migrationsDir, pairName)); err != nil {
-			if os.IsNotExist(err) {
+		if _, err := fs.Stat(fsys, pairName); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
 				return fmt.Errorf("missing migration pair for %q: expected %q to also exists", name, pairName)
 			}
 			return fmt.Errorf("check pair for %q: %w", name, err)

@@ -14,7 +14,7 @@ func TestListSQLMigrations(t *testing.T) {
 		os.WriteFile(tmpDir+"/"+f, []byte(""), 0644)
 	}
 
-	migrations, err := listSQLMigrations(tmpDir)
+	migrations, err := listSQLMigrations(os.DirFS(tmpDir))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestListSQLMigrations_InvalidFilename(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	os.WriteFile(tmpDir+"/invalid.sql", []byte(""), 0644)
-	_, err := listSQLMigrations(tmpDir)
+	_, err := listSQLMigrations(os.DirFS(tmpDir))
 	if err == nil {
 		t.Error("expected error for invalid filename, got nil")
 	}
@@ -52,7 +52,7 @@ func TestValidateMigrationFiles_MissingPair(t *testing.T) {
 	// Only .up.sql, no .down.sql
 	os.WriteFile(tmpDir+"/000001_init.up.sql", []byte(""), 0644)
 
-	err := validateMigrationFiles(tmpDir)
+	err := validateMigrationFiles(os.DirFS(tmpDir))
 	if err == nil {
 		t.Fatal("expected error due to missing pair, got nil")
 	}
@@ -65,7 +65,7 @@ func TestValidateMigrationFiles_InvalidFilename(t *testing.T) {
 	// Filename not matching expected pattern
 	os.WriteFile(tmpDir+"/bad_name.sql", []byte(""), 0644)
 
-	err := validateMigrationFiles(tmpDir)
+	err := validateMigrationFiles(os.DirFS(tmpDir))
 	if err == nil {
 		t.Fatal("expected error due to invalid filename, got nil")
 	}
@@ -77,7 +77,7 @@ func TestValidateMigrationFiles_Subdirectory(t *testing.T) {
 
 	os.Mkdir(tmpDir+"/subdir", 0755)
 
-	err := validateMigrationFiles(tmpDir)
+	err := validateMigrationFiles(os.DirFS(tmpDir))
 	if err == nil {
 		t.Fatal("expected error due to subdirectory, got nil")
 	}

@@ -9,7 +9,7 @@ It is designed to be embedded directly into your application, ensuring your data
 - **Zero Dependencies:** Only relies on `pgx/v5`.
 - **Safety First:** Uses PostgreSQL advisory locks to ensure multiple service instances don't run migrations simultaneously.
 - **Simple:** No configuration files or complex CLI tools. Just code.
-- **Immutable:** Enforces strict validation that applied migrations cannot be renamed, deleted, or edited — checksums are verified on every run.
+- **Immutable:** Enforces strict validation that applied migrations cannot be renamed, deleted, or edited (checksums are verified on every run).
 - **Reversible:** Every migration is paired with a `.down.sql` counterpart, validated up front.
 
 ## Getting Started
@@ -27,6 +27,7 @@ It is designed to be embedded directly into your application, ensuring your data
         import (
             "context"
             "log"
+            "os"
 
             "github.com/md-talim/vow"
         )
@@ -34,7 +35,7 @@ It is designed to be embedded directly into your application, ensuring your data
         func main() {
             // ... initialize your pgxpool.Pool ...
 
-            migrator, err := vow.New(dbPool, "./migrations")
+            migrator, err := vow.New(dbPool, os.DirFS("./migrations"))
             if err != nil {
                 log.Fatalf("invalid migrations directory: %v", err)
             }
@@ -96,6 +97,34 @@ migrator := vow.New(dbPool, "./migrations",
 )
 ```
 
+## Embedding Migrations
+
+Vow accepts any `fs.FS`, so migration files can be compiled directly into your binary with `//go:embed`, which is useful when shipping migrations as part of a library, where consumers won't have your `migrations/` folder on disk.
+
+```go
+import (
+    "embed"
+    "io/fs"
+
+    "github.com/md-talim/vow"
+)
+
+//go:embed migrations/*.sql
+var migrationFS embed.FS
+
+func newMigrator(pool *pgxpool.Pool) (*vow.Migrator, error) {
+    // //go:embed retains the migrations/ directory in the resulting
+    // fs.FS. Root it with fs.Sub so Vow sees the .sql files directly.
+    rooted, err := fs.Sub(migrationFS, "migrations")
+    if err != nil {
+        return nil, err
+    }
+    return vow.New(pool, rooted)
+}
+```
+
+Vow always assumes the `fs.FS` it's given is already rooted at the migrations directory; it never does subdirectory resolution internally. `os.DirFS("./migrations")` is already rooted correctly; an `embed.FS` from `//go:embed migrations/*.sql` is not, and needs `fs.Sub` first. This keeps the rooting decision in one place at construction time, rather than repeated as a directory argument on every call.
+
 ## Migration File Format
 
 Migration files must be named using a numeric prefix to ensure ordering, paired with matching `.up.sql` and `.down.sql` files:
@@ -115,7 +144,7 @@ A malformed directory fails at construction time, not later when a migration or 
 
 ## Design Notes
 
-- **Applied migrations are checksummed, not just tracked by filename.** Every `.up.sql` file's SHA-256 hash is stored alongside its version at apply time. On every `Up` or `Down` run, before anything else happens, Vow re-reads every already-applied file and compares hashes — if a file was edited or deleted after being applied, the run fails immediately, before touching the database further.
-- **Down migrations are not checksummed.** Once a migration is rolled back, its tracking row is deleted — there's no longer a stored claim about what the down-migration did, so there's nothing for a checksum to protect against drifting from. This is deliberate: rollbacks often happen _because_ a migration needs to change, so down-files are intentionally left free to edit.
+- **Applied migrations are checksummed, not just tracked by filename.** Every `.up.sql` file's SHA-256 hash is stored alongside its version at apply time. On every `Up` or `Down` run, before anything else happens, Vow re-reads every already-applied file and compares hashes: if a file was edited or deleted after being applied, the run fails immediately, before touching the database further.
+- **Down migrations are not checksummed.** When a migration is rolled back, Vow deletes its tracking row. Because no permanent record of the rollback exists, a checksum is unnecessary; there is no stored state left to drift. This is deliberate: rollbacks often happen _because_ a migration needs to change, so down-files are intentionally left free to edit.
 - **Down migrations are best-effort, not guaranteed-reversible.** A `.down.sql` file can undo a schema _shape_ change, but not necessarily recover data lost by the corresponding `.up.sql` (e.g. a dropped column). Write and review down migrations with that limitation in mind.
-- **`Up` never calls `Down` automatically.** If a migration fails partway through a deploy, Vow fails loudly and stops rather than attempting an automatic rollback — an already-failed state is the wrong moment for the tool to attempt a risky, unverified undo. That decision is left to a human.
+- **`Up` never calls `Down` automatically.** If a migration fails partway through a deploy, Vow fails loudly and stops rather than attempting an automatic rollback; an already-failed state is the wrong moment for the tool to attempt a risky, unverified undo. That decision is left to a human.
