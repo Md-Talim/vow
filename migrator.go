@@ -257,7 +257,8 @@ func (m *Migrator) rollbackMigration(ctx context.Context, conn *pgxpool.Conn, ve
 	return nil
 }
 
-// loadAppliedMigrations retrieves the set of applied migration versions from the database.
+// loadAppliedMigrations retrieves the set of applied migration versions from the database,
+// returned as migration filenames (e.g. "000001_init.up.sql").
 func (m *Migrator) loadAppliedMigrations(ctx context.Context, conn *pgxpool.Conn) (map[string]struct{}, error) {
 	query := fmt.Sprintf(`SELECT version FROM %s ORDER BY version`, m.tableName)
 	rows, err := conn.Query(ctx, query)
@@ -273,7 +274,8 @@ func (m *Migrator) loadAppliedMigrations(ctx context.Context, conn *pgxpool.Conn
 		if err := rows.Scan(&version); err != nil {
 			return nil, fmt.Errorf("scan applied version: %w", err)
 		}
-		applied[version] = struct{}{}
+		filename := fmt.Sprintf("%s.up.sql", version)
+		applied[filename] = struct{}{}
 	}
 
 	if err := rows.Err(); err != nil {

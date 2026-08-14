@@ -86,3 +86,84 @@ func TestMigrator(t *testing.T) {
 		t.Error("expected users table to not exists, but it exists")
 	}
 }
+
+func TestMigratorIdempotent(t *testing.T) {
+	// 1. Skip if no database is available.
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		t.Skip("DATABASE_URL not set; skipping integration tests")
+	}
+
+	// 2. Setup a temporary directory for migration files
+	tmpDir, err := os.MkdirTemp("", "migrations_idempotent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	migrationFile := filepath.Join(tmpDir, "000001_test.up.sql")
+	if err := os.WriteFile(migrationFile, []byte("CREATE TABLE products (id SERIAL PRIMARY KEY);"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	downFile := filepath.Join(tmpDir, "000001_test.down.sql")
+	if err := os.WriteFile(downFile, []byte("DROP TABLE products;"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Connect to DB
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, dbURL)
+	if err != nil {
+		t.Fatalf("failed to connect to db: %v", err)
+	}
+	defer pool.Close()
+
+	tableName := "test_idempotent_schema_migrations"
+	m, err := New(pool, os.DirFS(tmpDir), WithTableName(tableName))
+	if err != nil {
+		t.Fatalf("failed to create migrator: %v", err)
+	}
+
+	defer func() {
+		_, _ = pool.Exec(context.Background(), "DROP TABLE IF EXISTS products;")
+		_, _ = pool.Exec(context.Background(), "DROP TABLE IF EXISTS "+tableName+";")
+	}()
+
+	// 4. First run: Should apply the migration
+	result1, err := m.Up(ctx)
+	if err != nil {
+		t.Fatalf("first migration run failed: %v", err)
+	}
+	if len(result1.Versions) != 1 || result1.Versions[0] != "000001_test" {
+		t.Fatalf("expected 1 migration to be applied on first run, got versions: %v", result1.Versions)
+	}
+	if result1.Skipped != 0 {
+		t.Errorf("expected 0 skipped migrations on first run, got: %d", result1.Skipped)
+	}
+
+	// Verify table exists
+	var exists bool
+	err = pool.QueryRow(ctx, "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'products')").Scan(&exists)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists {
+		t.Error("expected products table to exist after first run")
+	}
+
+	// 5. Second run: Should skip the already applied migration
+	result2, err := m.Up(ctx)
+	if err != nil {
+		t.Fatalf("second migration run failed: %v", err)
+	}
+	if len(result2.Versions) != 0 {
+		t.Fatalf("expected 0 migrations to be applied on second run, got versions: %v", result2.Versions)
+	}
+	if result2.Skipped != 1 {
+		t.Errorf("expected 1 skipped migration on second run, got: %d", result2.Skipped)
+	}
+}
+
