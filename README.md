@@ -4,6 +4,8 @@ Vow is a lightweight, opinionated migration runner for Go projects using `pgx` a
 
 It is designed to be embedded directly into your application, ensuring your database schema is up-to-date before your service starts.
 
+[Quick Start](#quick-start) • [Command Line](#command-line) • [Migration File Format](#migration-file-format) • [Design Notes](#design-notes)
+
 ## Motivation
 
 I wanted to understand how database migration tools work internally. Having already used tools like Goose and Flyway, I didn't build Vow because I was missing a tool, I wanted to see what happens underneath the abstraction. I built a migration runner from scratch while working on [dhara](https://github.com/Md-Talim/dhara).
@@ -129,6 +131,49 @@ func newMigrator(pool *pgxpool.Pool) (*vow.Migrator, error) {
 ```
 
 Vow always assumes the `fs.FS` it's given is already rooted at the migrations directory; it never does subdirectory resolution internally. `os.DirFS("./migrations")` is already rooted correctly; an `embed.FS` from `//go:embed migrations/*.sql` is not, and needs `fs.Sub` first. This keeps the rooting decision in one place at construction time, rather than repeated as a directory argument on every call.
+
+## Command Line
+
+Vow ships with a minimal CLI, `vow`, for running migrations from the terminal. It is handy for local development and test teardown, where running migrations by hand beats embedding Vow in a throwaway program.
+
+Install it with:
+
+```bash
+go install github.com/md-talim/vow/cmd/vow@latest
+```
+
+Usage:
+
+```text
+vow <command> [flags]
+
+Commands:
+  up    Apply all pending migrations
+  down  Roll back the N most recently applied migrations (default 1)
+```
+
+`up` applies every pending migration and prints a summary:
+
+```bash
+DATABASE_URL=postgres://user:pass@localhost:5432/mydb vow up
+# applied 2, skipped 0, took 45ms
+```
+
+`down` rolls back the N most recently applied migrations in reverse order. N defaults to 1:
+
+```bash
+vow down      # roll back the single most recent migration
+vow down 3    # roll back the three most recent migrations
+```
+
+Both commands accept the same flags:
+
+- `--database-url` PostgreSQL connection URL. Defaults to `$DATABASE_URL`.
+- `--migrations-dir` Path to the migrations directory. Defaults to `./migrations`.
+- `--table-name` Name of the migration tracking table. Defaults to `schema_migrations`.
+- `--lock-name` Name of the advisory lock. Defaults to `vow:migrations`.
+
+Run `vow <command> -h` for command-specific help. `vow` exits with status 0 on success, 1 on failure, and 130 if interrupted.
 
 ## Migration File Format
 
