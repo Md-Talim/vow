@@ -1,8 +1,9 @@
 # Vow
 
-[![Go version](https://img.shields.io/github/go-mod/go-version/md-talim/vow)](https://go.dev/doc/install) 
+[![Go version](https://img.shields.io/github/go-mod/go-version/md-talim/vow)](https://go.dev/doc/install)
+![GitHub release (latest by date)](https://img.shields.io/github/v/release/md-talim/vow)
 [![License: MIT](https://img.shields.io/github/license/md-talim/vow)](LICENSE)
-[![Tests](https://github.com/md-talim/vow/actions/workflows/ci.yml/badge.svg)](https://github.com/md-talim/vow/actions/workflows/ci.yml) 
+[![Tests](https://github.com/md-talim/vow/actions/workflows/ci.yml/badge.svg)](https://github.com/md-talim/vow/actions/workflows/ci.yml)
 
 Vow is a lightweight, opinionated migration runner for Go projects using `pgx` and PostgreSQL.
 
