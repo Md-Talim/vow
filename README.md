@@ -1,5 +1,6 @@
 # Vow
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/md-talim/vow.svg)](https://pkg.go.dev/github.com/md-talim/vow)
 [![Go version](https://img.shields.io/github/go-mod/go-version/md-talim/vow)](https://go.dev/doc/install)
 ![GitHub release (latest by date)](https://img.shields.io/github/v/release/md-talim/vow)
 [![License: MIT](https://img.shields.io/github/license/md-talim/vow)](LICENSE)
