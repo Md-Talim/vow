@@ -12,6 +12,10 @@ It is designed to be embedded directly into your application, ensuring your data
 
 [Quick Start](#quick-start) • [Command Line](#command-line) • [Migration File Format](#migration-file-format) • [Design Notes](#design-notes)
 
+## Demo
+
+[![Vow CLI Demo](https://github.com/user-attachments/assets/033e6561-af51-4413-8603-9f21edc44867)](https://github.com/user-attachments/assets/033e6561-af51-4413-8603-9f21edc44867)
+
 ## Motivation
 
 I wanted to understand how database migration tools work internally. Having already used tools like Goose and Flyway, I didn't build Vow because I was missing a tool, I wanted to see what happens underneath the abstraction. I built a migration runner from scratch while working on [dhara](https://github.com/Md-Talim/dhara).
